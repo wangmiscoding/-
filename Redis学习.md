@@ -234,3 +234,129 @@ public String add(User user) {
 }
 ```
 
+### Redis持久化
+
+新建RedisTemplateUtils类，注入RedisTemplate<String,Object> redisTemplate变量。
+
+```java
+public class RedisTemplateUtils {
+    
+    private static RedisTemplate<String,Object> redisTemplate;
+    
+
+    public static void setObject(String key, Object value) {
+        setObject(key, value, 1000L);
+    }
+
+    public static void setObject(String key, Object value, Long timeout) {
+        redisTemplate.opsForValue().set(key, value);
+        if (null != timeout) {
+            redisTemplate.expire(key, timeout, TimeUnit.SECONDS);
+        }
+    }
+
+    public static Object get(String key) {
+        return redisTemplate.opsForValue().get(key);
+    }
+
+
+    public static void init(RedisTemplate template) {
+        redisTemplate = template;
+    }
+}
+```
+
+
+
+存进redis的值要实现序列化接口，存入redis的结果是二进制
+
+### springboot整合Redis注解版本
+
+启动类加上注解@EnableCaching
+
+controller上加注解@Cacheable
+
+```java
+/**
+ * cacheNames:文件夹
+ * key:真实的key
+ * @return
+ */
+@GetMapping("all")
+@Cacheable(cacheNames = "member",key = "'allUser'")
+public List<User> list(){
+    return userMapper.list();
+}
+```
+
+**注意**:key值一定要加单引号''
+
+
+
+### Mysql与Reids的数据不同步的问题如何解决？
+
+方式1：直接清理Redis的缓存，重新查询数据库即可
+
+方式2：直接采用mq订阅mysql binlog日志文件增量同步到Redis中。
+
+方式3：使用alibaba的canal
+
+### Redis持久化机制
+
+Redis因为某种原因宕机之后，数据是不会丢失的。
+
+原理就是持久化
+
+大部分缓存框架都会有基本功能淘汰策略，持久机制
+
+**Redis的持久化机制有两种：AOF,RDB（默认）**
+
+全量同步与增量同步：
+
+1. 每天定时（避开高峰期）或者采用一种周期的实现将数据拷贝到另外的一个地方。
+
+> 频率不是很大，可能会产生数据丢失，假设900s以内，如果我们队redis做过10次写操作 将所有数据写入到硬盘中。
+
+2. 增量同步采用行为操作对数据实现同步
+
+> 频率比较高、对服务器同步的压力也非常大，保证数据不丢失
+
+### RDB与AOF实现持久化的区别
+
+RDB采用定时（全量）持久化机制，但是服务器因为某种原因宕机后可能数据会丢失，AOF是基于数据日志操作实现的持久化，所有AOF采用增量同步的方案。
+
+
+
+​	Redis默认开启RDB存储。
+
+
+
+**RDB实现持久化**
+
+![image-20211006073446108](C:\Users\王萌\Desktop\Redis学习.assets\image-20211006073446108.png)
+
+![image-20211006073225814](C:\Users\王萌\Desktop\Redis学习.assets\image-20211006073225814.png)
+
+
+
+**AOF实现持久化**
+
+在Redis的配置文件中存在三种同步方式，它分别是：
+
+appendfsync always   #每次有数据修改发生时都会写入AOF文件，能够实时的保证数据的安全性。
+
+appendfsync everysec  #每秒钟同步一次，该策略为AOF的缺省策略。
+
+appendfsync no             #从不同步。高效但是数据不会被持久化。
+
+修改redis.conf将appendonly no改为yes
+
+![image-20211006080419476](C:\Users\王萌\Desktop\Redis学习.assets\image-20211006080419476.png)
+
+
+
+always方式每次写请求都产生数据同步，会执行大量io操作，影响效率。
+
+every方式引入了缓冲区，每秒从缓冲区读取数据，提供了效率，建议使用every方式。可能会丢失1s内的数据，但是同步效率高。
+
+S
