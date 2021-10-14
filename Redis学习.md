@@ -234,7 +234,7 @@ public String add(User user) {
 }
 ```
 
-### Redis持久化
+### 存放二进制类型
 
 新建RedisTemplateUtils类，注入RedisTemplate<String,Object> redisTemplate变量。
 
@@ -269,6 +269,12 @@ public class RedisTemplateUtils {
 
 
 存进redis的值要实现序列化接口，存入redis的结果是二进制
+
+使用json和二进制有哪些区别？
+
+> 二进制不能跨平台，只能一种语言使用
+>
+> json阅读性强
 
 ### springboot整合Redis注解版本
 
@@ -359,4 +365,224 @@ always方式每次写请求都产生数据同步，会执行大量io操作，影
 
 every方式引入了缓冲区，每秒从缓冲区读取数据，提供了效率，建议使用every方式。可能会丢失1s内的数据，但是同步效率高。
 
-S
+### Redis淘汰策略
+
+Redis数据存放在内存里面，有可能会内存撑爆，为了防止内存不足，会有内存淘汰策略
+
+内存淘汰策略：在redis服务器上设置存放缓存的阈值(100mb 1g),如果内存空间用满，就会自动驱逐老的数据。
+
+**Redis六种淘汰策略**
+
+noeviction:当内存使用达到阈值的时候，所有引起申请内存的命令会报错。**(默认)**
+
+allkeys-lru:在主键空间中，优先移除最近未使用的key。**(推荐)**
+
+volatile-lru:在设置了过期空间的键空间中，优先移除最近未使用的Key。
+
+allkeys-random:在主键空间中，随机移除某个key。
+
+volatile-rando m:在设置了过期时间的键空间中，随机移除某个Key。
+
+volatile-ttl:在设置了过期时间的键空间中，具有更早过期时间的key优先移除。
+
+**如何配置Redis淘汰策略**
+
+在redis.conf文件中，# maxmemory <bytes>设置Redis内存大小，
+
+设置淘汰策略
+
+```java
+# The default is:
+#
+# maxmemory-policy allkeys-lru
+```
+
+
+
+### Redis中的自动过期机制
+
+实现需求：处理订单过期自动取消，比如下单30分钟未支付自动更改订单状态。
+
+1. 采用定时任务，30分钟后检查该笔订单是否已经支付。
+
+2. 根据key有效期事件回调实现。
+
+原理：
+
+1.创建订单时绑定一个订单token存放在redis(有效期只有30分钟)
+
+key=token value 订单 id
+
+2.对该Key绑定过期时间回调，执行回调方法传递订单id
+
+**当我们的key实效时，可以执行我们的客户端回调监听的方法。**
+
+需要在redis中配置：
+
+将notify-keyspace-events "Ex"注释放开
+
+**Springboot整合key失效监听**
+
+```java
+/**
+ * @author wangm
+ * @since 2021/10/7
+ */
+@Configuration
+public class RedisListenerConfig {
+
+    @Bean
+    RedisMessageListenerContainer container(RedisConnectionFactory connectionFactory) {
+        RedisMessageListenerContainer container = new RedisMessageListenerContainer();
+        container.setConnectionFactory(connectionFactory);
+        return container;
+    }
+}
+
+
+
+/**
+ * 监听redis key 事件回调
+ * @author wangm
+ * @since 2021/10/7
+ */
+@Component
+public class RedisKeyExpirationListener extends KeyExpirationEventMessageListener {
+    public RedisKeyExpirationListener(RedisMessageListenerContainer listenerContainer) {
+        super(listenerContainer);
+    }
+
+    /**
+     * 使用该方法监听 当我们的key失效的时候执行该方法
+     * @param message
+     * @param pattern
+     */
+    @Override
+    public void onMessage(Message message, byte[] pattern) {
+        String expiredKey = message.toString();
+        System.out.println("expiredKey"+expiredKey+"失效");
+    }
+}
+```
+
+### Redis事务操作
+
+**Multi事务策略**
+
+Multi  开启事务
+
+EXEC  提交事务
+
+Watch        可以监听一个或者多个Key，在提交事务之前是否发生了变化，如果发生了变化就不会提交事务，没有发生变化才可以提交事务。
+
+在redis中使用multi对key开启事务,其他的线程可以对该key执行set操作，后提交的事务将会覆盖先前的修改。、
+
+首先watch key，监听一个key
+
+然后multi开启事务
+
+exec提交事务，在此期间，如果key被其他线程修改，则提交失败。
+
+**相当于乐观锁**
+
+在开启事务之后，可以通过**Discard**取消事务
+
+
+
+**取消事务和回滚事务有什么区别？**
+
+Mysql中开启事务，对该行数据上行锁，commit数据可以提交，回滚：对事务和行锁都会撤销。
+
+redis没有行锁，所有没有回滚，只是单纯取消事务（不提交事务）
+
+
+
+### Redis实现分布式锁
+
+什么事分布式锁？
+
+> 本地锁：在多个线程中，保证只有一个线程执行
+>
+> 分布式锁：在分布式系统中，保证只有一个Jvm执行（多个Jvm线程安全问题）
+
+
+
+**分布式锁实现方案:**
+
+基于数据库方式实现
+
+基于Zk方式实现，采用临时节点+事件通知
+
+基于Redis方式实现  setnx命令方式
+
+
+
+解决分布式锁核心思路：
+
+1. 获取锁资源
+
+   > 多个不同的jvm同时创建一个标记，只要谁能够创建成功谁就能获取锁
+
+2. 释放锁
+
+   > 释放该全局唯一的标记，其他的jvm重新进入到获取锁资源
+
+3. 超时锁
+
+   > 一直没有获取到锁：等待获取锁的超时时间
+   >
+   > 已经获取到锁：锁的有效期5s
+
+**Redis实现分布式锁**
+
+1. 获取锁资源
+
+   > 使用setnx命令，因为Rediskey必须保证是唯一的，只有谁能创建成功谁就能获取到锁
+
+   SetNx命令：如果key不存在则创建，如果key已经存在则不执行任何操作返回0。
+
+   
+
+2. 释放锁
+
+   > redis的Key设置一个有效期（或者主动删除该key）可以灵活的自动的释放该标记。
+
+3. 超时锁
+
+   > 一直没有获取到锁：等待获取锁的超时时间
+   >
+   > 已经获取到锁：到达超时时长，自动释放，删除key
+
+
+
+​	锁的超时时间怎么确定？
+
+> 1. 根据业务场景来预估
+>
+> 2. 可以自己延迟锁的时间
+>
+> 3. 在提交事务时，检查锁是否已经超时，如果已经超时则回滚，否则提交
+
+
+
+以上仅限于redis单机版本
+
+
+
+**分析基于Zk实现分布式锁思路**
+
+1. 获取锁资源
+
+   > 多个不同Jvm在zk集群上创建一个相同的全局唯一的临时路径，只要谁能创建成功谁就能获取到锁。
+   >
+   > 临时节点对我们节点设置有效期
+
+2. 释放锁
+
+   > 人为主动删除该节点或者使用Session有效期
+
+3. 超时锁
+
+   > 一直没有获取到锁：等待获取锁的超时时间
+   >
+   > 已经获取到锁：锁的有效期5s
